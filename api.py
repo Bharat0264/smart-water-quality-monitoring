@@ -1,52 +1,38 @@
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
-from datetime import datetime
 import joblib
 import os
+from datetime import datetime
+import numpy as np
 
 app = Flask(__name__)
 
-# ----------------------------
-# MongoDB Atlas Configuration
-# ----------------------------
+# ------------------ CONFIG ------------------
+
 MONGO_URI = os.environ.get(
     "MONGO_URI",
-    "mongodb+srv://Bharat5741:Puli@3125@water-quality-cluster.d5ddvpd.mongodb.net/water_quality?retryWrites=true&w=majority"
+    "mongodb+srv://Bharat5741:Puli@3125@water-quality-cluster.d5ddvpd.mongodb.net/?retryWrites=true&w=majority"
 )
 
-client = MongoClient(MONGO_URI)
-db = client["water_quality"]
-collection = db["readings"]
+DB_NAME = "water_quality_db"
+COLLECTION_NAME = "sensor_data"
 
-# ----------------------------
-# Load ML Model
-# ----------------------------
+# Load ML model
 model = joblib.load("model.pkl")
 
-# ----------------------------
-# Utility: Safe / Unsafe Logic
-# ----------------------------
-def rule_based_check(ph, turbidity, temperature):
-    if ph < 6.5 or ph > 8.5:
-        return "Unsafe"
-    if turbidity > 5:
-        return "Unsafe"
-    if temperature < 10 or temperature > 35:
-        return "Unsafe"
-    return "Safe"
+# MongoDB connection
+client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
+collection = db[COLLECTION_NAME]
 
-# ----------------------------
-# Root Route
-# ----------------------------
-@app.route("/")
+# ------------------ ROUTES ------------------
+
+@app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "message": "Smart Water Quality Monitoring API is running"
     })
 
-# ----------------------------
-# POST Sensor Data
-# ----------------------------
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     try:
@@ -57,17 +43,15 @@ def receive_data():
         temperature = float(data["temperature"])
 
         # ML Prediction
-        prediction = model.predict([[ph, turbidity, temperature]])[0]
-
-        # Rule-based override (safety critical)
-        final_status = rule_based_check(ph, turbidity, temperature)
+        features = np.array([[ph, turbidity, temperature]])
+        prediction = model.predict(features)[0]
+        status = "Safe" if prediction == 1 else "Unsafe"
 
         record = {
             "ph": ph,
             "turbidity": turbidity,
             "temperature": temperature,
-            "ml_prediction": str(prediction),
-            "final_status": final_status,
+            "prediction": status,
             "timestamp": datetime.utcnow()
         }
 
@@ -75,27 +59,33 @@ def receive_data():
 
         return jsonify({
             "message": "Data stored successfully",
-            "prediction": final_status
+            "prediction": status
         })
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 500
+
+@app.route("/api/latest", methods=["GET"])
+def latest_data():
+    try:
+        doc = collection.find_one(
+            {},
+            {"_id": 0},
+            sort=[("timestamp", -1)]
+        )
+
+        if doc:
+            return jsonify(doc)
+        else:
+            return jsonify({"message": "No data available"})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ----------------------------
-# GET Latest Reading
-# ----------------------------
-@app.route("/api/latest", methods=["GET"])
-def get_latest():
-    doc = collection.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
+# ------------------ RUN ------------------
 
-    if not doc:
-        return jsonify({"message": "No data available"})
-
-    return jsonify(doc)
-
-# ----------------------------
-# Run App (Render Compatible)
-# ----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
