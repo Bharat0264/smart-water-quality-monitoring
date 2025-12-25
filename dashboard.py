@@ -1,90 +1,117 @@
 import streamlit as st
 import requests
 import pandas as pd
+import time
 
-API_URL = "http://127.0.0.1:5000/api/data"
+API_BASE_URL = "http://127.0.0.1:5000"
+REFRESH_INTERVAL = 1800  # 30 minutes
 
-st.set_page_config(page_title="Water Quality Monitoring", layout="centered")
+st.set_page_config(
+    page_title="Smart Water Quality Monitoring",
+    layout="wide",
+    page_icon="🚰"
+)
 
-st.title("💧 Smart Water Quality Monitoring & Prediction System")
-st.subheader("AI-based Real-Time Water Safety Assessment")
-
-st.markdown("""
-This system monitors **pH**, **turbidity**, and **temperature**  
-and predicts whether water is **Safe or Unsafe** using Machine Learning.
-""")
+# =========================
+# HEADER
+# =========================
+st.title("🚰 Smart Water Quality Monitoring System")
+st.caption("Real-time monitoring and ML-based water safety prediction")
 
 st.divider()
 
-# ---------------- LIVE READINGS ----------------
-st.header("📡 Live Water Sample Readings")
+# =========================
+# LIVE SENSOR SECTION
+# =========================
+st.subheader("📡 Live Sensor Readings")
 
 try:
-    response = requests.get(API_URL, timeout=3)
-    if response.status_code == 200 and len(response.json()) > 0:
-        latest = response.json()[0]
+    live = requests.get(f"{API_BASE_URL}/api/latest", timeout=5).json()
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("pH", latest["ph"])
-        col2.metric("Turbidity (NTU)", latest["turbidity"])
-        col3.metric("Temperature (°C)", latest["temperature"])
-        col4.metric("Status", latest["prediction"])
+    if "ph" in live:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("pH", live["ph"])
+        c2.metric("Turbidity (NTU)", live["turbidity"])
+        c3.metric("Temperature (°C)", live["temperature"])
+        c4.metric("Status", "🟢 SAFE" if live["prediction"] == "Safe" else "🔴 UNSAFE")
+
+        st.caption(f"Last updated: {live['timestamp']}")
     else:
-        st.info("No live data available.")
+        st.info("No live data yet")
+
 except:
-    st.error("Flask API not reachable.")
+    st.error("API not running")
 
 st.divider()
 
-# ---------------- PREDICTION ----------------
-st.header("🔍 Analyze New Water Sample")
+# =========================
+# HISTORY GRAPHS
+# =========================
+st.subheader("📊 Water Quality Trends")
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    ph = st.number_input("pH", 0.0, 14.0, 7.0, step=0.1)
-with c2:
-    turbidity = st.number_input("Turbidity (NTU)", 0.0, 100.0, 2.0, step=0.1)
-with c3:
-    temperature = st.number_input("Temperature (°C)", -5.0, 100.0, 25.0, step=0.1)
+try:
+    history = requests.get(f"{API_BASE_URL}/api/history", timeout=5).json()
+    df = pd.DataFrame(history)
 
-if st.button("🧠 Predict Water Quality"):
+    if not df.empty:
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.line_chart(df.set_index("timestamp")["ph"], height=300)
+            st.caption("pH Variation Over Time")
+
+        with col2:
+            st.line_chart(df.set_index("timestamp")["turbidity"], height=300)
+            st.caption("Turbidity Variation Over Time")
+
+        col3, col4 = st.columns(2)
+
+        with col3:
+            st.line_chart(df.set_index("timestamp")["temperature"], height=300)
+            st.caption("Temperature Variation Over Time")
+
+        with col4:
+            status_count = df["prediction"].value_counts()
+            st.bar_chart(status_count, height=300)
+            st.caption("Safe vs Unsafe Readings")
+
+    else:
+        st.warning("No historical data available")
+
+except:
+    st.error("Unable to load history data")
+
+st.divider()
+
+# =========================
+# MANUAL TEST
+# =========================
+st.subheader("🧪 Manual Water Test")
+
+with st.form("manual_test"):
+    c1, c2, c3 = st.columns(3)
+    ph = c1.number_input("pH", 0.0, 14.0, 7.0)
+    turbidity = c2.number_input("Turbidity (NTU)", 0.0, value=2.0)
+    temperature = c3.number_input("Temperature (°C)", value=25.0)
+    submit = st.form_submit_button("Analyze")
+
+if submit:
     payload = {
         "ph": ph,
         "turbidity": turbidity,
         "temperature": temperature
     }
-
     try:
-        res = requests.post(API_URL, json=payload, timeout=5)
-        result = res.json()
-        pred = result["prediction"]
-
-        if pred == "Safe":
-            st.success("✅ Water Quality is SAFE")
+        res = requests.post(f"{API_BASE_URL}/api/data", json=payload).json()
+        if res["prediction"] == "Safe":
+            st.success("✅ Water is SAFE")
         else:
-            st.error("❌ Water Quality is UNSAFE")
+            st.error("❌ Water is UNSAFE")
     except:
-        st.error("Prediction failed.")
+        st.error("API error")
 
-st.divider()
-
-# ---------------- HISTORY ----------------
-st.header("📊 Recent Readings")
-
-try:
-    hist = requests.get(API_URL).json()
-    df = pd.DataFrame(hist)
-    st.dataframe(df)
-except:
-    st.info("No data available.")
-
-st.divider()
-
-st.header("ℹ️ Safe Water Standards")
-st.markdown("""
-- **pH:** 6.5 – 8.5  
-- **Turbidity:** ≤ 5 NTU  
-- **Temperature:** 10 – 30 °C  
-""")
-
-st.caption("Minor Project – Smart Water Quality Monitoring System")
+st.caption("🔄 Auto-refresh every 30 minutes")
+time.sleep(REFRESH_INTERVAL)
+st.rerun()
