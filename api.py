@@ -1,89 +1,68 @@
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
+from datetime import datetime
 import joblib
 import os
-from datetime import datetime
 
 app = Flask(__name__)
 
-# ===============================
-# MongoDB Atlas Connection
-# ===============================
-MONGO_URI = os.environ.get("MONGO_URI")
-
-if not MONGO_URI:
-    raise RuntimeError("MONGO_URI environment variable not set")
+# =========================
+# MongoDB Atlas connection
+# =========================
+MONGO_URI = os.environ.get(
+    "MONGO_URI",
+    "mongodb+srv://Bharat5741:Puli@3125@water-quality-cluster.d5ddvpd.mongodb.net/water_quality?retryWrites=true&w=majority"
+)
 
 client = MongoClient(MONGO_URI)
 db = client["water_quality"]
 collection = db["sensor_data"]
 
-# ===============================
-# Load ML Model
-# ===============================
-MODEL_PATH = "model.pkl"
+# =========================
+# Load ML model
+# =========================
+model = joblib.load("model.pkl")
 
-if not os.path.exists(MODEL_PATH):
-    raise RuntimeError("model.pkl not found")
-
-model = joblib.load(MODEL_PATH)
-
-# ===============================
-# Health Check Route
-# ===============================
-@app.route("/", methods=["GET"])
+# =========================
+# Routes
+# =========================
+@app.route("/")
 def home():
-    return "Smart Water Quality Monitoring API is running."
+    return "Smart Water Quality Monitoring API is running"
 
-# ===============================
-# Receive Sensor Data + Predict
-# ===============================
 @app.route("/api/data", methods=["POST"])
 def receive_data():
-    try:
-        data = request.get_json()
+    data = request.get_json()
 
-        ph = float(data.get("ph"))
-        turbidity = float(data.get("turbidity"))
-        temperature = float(data.get("temperature"))
+    ph = data.get("ph")
+    turbidity = data.get("turbidity")
+    temperature = data.get("temperature")
 
-        # ML Prediction
-        prediction = model.predict([[ph, turbidity, temperature]])[0]
-        result = "Safe" if prediction == 1 else "Unsafe"
+    prediction = model.predict([[ph, turbidity, temperature]])[0]
 
-        record = {
-            "ph": ph,
-            "turbidity": turbidity,
-            "temperature": temperature,
-            "prediction": result,
-            "timestamp": datetime.utcnow()
-        }
+    record = {
+        "ph": ph,
+        "turbidity": turbidity,
+        "temperature": temperature,
+        "prediction": "Safe" if prediction == 1 else "Unsafe",
+        "timestamp": datetime.utcnow()
+    }
 
-        collection.insert_one(record)
+    collection.insert_one(record)
 
-        return jsonify({
-            "message": "Data stored successfully",
-            "prediction": result
-        })
+    return jsonify({
+        "message": "Data stored successfully",
+        "prediction": record["prediction"]
+    })
 
-    except Exception as e:
-        return jsonify({
-            "error": str(e)
-        }), 500
-
-# ===============================
-# Fetch Latest Reading
-# ===============================
 @app.route("/api/latest", methods=["GET"])
 def latest_data():
-    doc = collection.find_one(sort=[("timestamp", -1)], {"_id": 0})
-    if doc:
-        return jsonify(doc)
-    return jsonify({"message": "No data available"}), 404
+    doc = collection.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
+    return jsonify(doc if doc else {})
 
-# ===============================
-# Run App (Render Compatible)
-# ===============================
+# =========================
+# Run server
+# =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
