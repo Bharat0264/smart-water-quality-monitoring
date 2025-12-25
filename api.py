@@ -2,16 +2,16 @@ from flask import Flask, request, jsonify
 from pymongo import MongoClient
 from datetime import datetime
 import joblib
-import os
+import numpy as np
 
 app = Flask(__name__)
 
 # =========================
-# Local MongoDB Connection
+# MongoDB (LOCAL)
 # =========================
 client = MongoClient("mongodb://localhost:27017/")
 db = client["water_quality_db"]
-collection = db["sensor_data"]
+collection = db["readings"]
 
 # =========================
 # Load ML Model
@@ -19,37 +19,40 @@ collection = db["sensor_data"]
 model = joblib.load("model.pkl")
 
 # =========================
-# Home Route
+# HOME ROUTE
 # =========================
 @app.route("/")
 def home():
-    return "Smart Water Quality Monitoring API is running."
+    return "Smart Water Quality Monitoring API is running"
 
 # =========================
-# Receive Sensor Data
+# POST SENSOR DATA
 # =========================
 @app.route("/api/data", methods=["POST"])
 def receive_data():
-    data = request.json
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "No data received"}), 400
 
     ph = data.get("ph")
     turbidity = data.get("turbidity")
     temperature = data.get("temperature")
 
     if ph is None or turbidity is None or temperature is None:
-        return jsonify({"error": "Invalid data"}), 400
+        return jsonify({"error": "Missing parameters"}), 400
 
     # ML Prediction
-    prediction = model.predict([[ph, turbidity, temperature]])[0]
+    features = np.array([[ph, turbidity, temperature]])
+    prediction = model.predict(features)[0]
     result = "Safe" if prediction == 1 else "Unsafe"
 
-    # Store in MongoDB
     record = {
         "ph": ph,
         "turbidity": turbidity,
         "temperature": temperature,
         "prediction": result,
-        "timestamp": datetime.now()
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
     collection.insert_one(record)
@@ -60,23 +63,29 @@ def receive_data():
     })
 
 # =========================
-# Fetch Latest Data
+# GET LATEST READING
 # =========================
 @app.route("/api/latest", methods=["GET"])
 def get_latest():
-    doc = collection.find_one(
-        {},
-        sort=[("timestamp", -1)],
-        projection={"_id": 0}
-    )
+    doc = collection.find_one(sort=[("_id", -1)], projection={"_id": 0})
 
     if not doc:
-        return jsonify({"message": "No data available"})
+        return jsonify({"error": "No data found"}), 404
 
     return jsonify(doc)
 
 # =========================
-# Run App (Same WiFi Access)
+# GET HISTORY (FOR GRAPHS)
+# =========================
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    docs = list(
+        collection.find({}, {"_id": 0}).sort("_id", -1).limit(50)
+    )
+    return jsonify(docs[::-1])
+
+# =========================
+# RUN SERVER
 # =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
